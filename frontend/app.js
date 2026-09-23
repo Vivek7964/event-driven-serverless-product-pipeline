@@ -1,5 +1,5 @@
 const API_URL =
-    "https://pl07dnikae.execute-api.us-east-1.amazonaws.com";
+    "https://add-your-api-gateway-url.us-east-1.amazonaws.com";
 
 
 const uploadButton =
