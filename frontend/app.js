@@ -1,5 +1,5 @@
 const API_URL =
-    "https://c48y5mj1ma.execute-api.us-east-1.amazonaws.com";
+    "https://pl07dnikae.execute-api.us-east-1.amazonaws.com";
 
 
 const uploadButton =
