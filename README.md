@@ -97,7 +97,9 @@ An Amazon SQS Dead Letter Queue is also configured to isolate messages that repe
 
 Watch the complete project demonstration:
 
-[![Project Demo](docs/cloudfront-demo.png)](docs/demo.mp4)
+
+https://github.com/user-attachments/assets/af1192e6-8044-42bd-ae25-9e182088dfb4
+
 
 The demonstration covers:
 
