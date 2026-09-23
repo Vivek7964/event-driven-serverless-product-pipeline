@@ -1,0 +1,488 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  Event-Driven Serverless Product Processing Pipeline
+  using Amazon S3, Lambda, SQS, DynamoDB and API Gateway.
+
+# ============================================================
+# GLOBAL SETTINGS
+# ============================================================
+
+Globals:
+
+  Function:
+    Runtime: nodejs24.x
+    Timeout: 30
+    MemorySize: 128
+    Architectures:
+      - x86_64
+
+# ============================================================
+# RESOURCES
+# ============================================================
+
+Resources:
+
+  # ==========================================================
+  # DYNAMODB TABLE
+  # ==========================================================
+
+  ProductsTable:
+    Type: AWS::DynamoDB::Table
+
+    Properties:
+      TableName: EventDrivenProducts
+
+      BillingMode: PAY_PER_REQUEST
+
+      AttributeDefinitions:
+        - AttributeName: productId
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: productId
+          KeyType: HASH
+
+  # ==========================================================
+  # SQS DEAD LETTER QUEUE
+  # ==========================================================
+
+  ProductsDLQ:
+    Type: AWS::SQS::Queue
+
+    Properties:
+      QueueName: EventDrivenProductsDLQ
+
+  # ==========================================================
+  # SQS MAIN QUEUE
+  # ==========================================================
+
+  ProductsQueue:
+    Type: AWS::SQS::Queue
+
+    Properties:
+      QueueName: EventDrivenProductsQueue
+
+      # Must be >= Lambda timeout
+      VisibilityTimeout: 60
+
+      RedrivePolicy:
+        deadLetterTargetArn:
+          Fn::GetAtt:
+            - ProductsDLQ
+            - Arn
+
+        maxReceiveCount: 3
+
+  # ==========================================================
+  # S3 BUCKET
+  # ==========================================================
+
+  ProductsBucket:
+    Type: AWS::S3::Bucket
+
+    Properties:
+
+      # Unique name for the SAM-managed environment.
+      # This is different from your existing manual bucket.
+      BucketName: event-driven-products-sam-344kjbds231jkda
+
+      BucketEncryption:
+
+        ServerSideEncryptionConfiguration:
+
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      CorsConfiguration:
+
+        CorsRules:
+
+          - AllowedHeaders:
+              - '*'
+
+            AllowedMethods:
+              - PUT
+
+            AllowedOrigins:
+              - '*'
+
+            ExposedHeaders:
+              - ETag
+
+  # ==========================================================
+  # API GATEWAY HTTP API
+  # ==========================================================
+
+  ProductsApi:
+    Type: AWS::Serverless::HttpApi
+
+    Properties:
+
+      StageName: '$default'
+
+      CorsConfiguration:
+
+        AllowOrigins:
+          - '*'
+
+        AllowHeaders:
+          - content-type
+
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+
+  # ==========================================================
+  # CSV PROCESSOR LAMBDA
+  #
+  # S3
+  #  ↓
+  # CSVProcessorFunction
+  #  ↓
+  # SQS
+  # ==========================================================
+
+  CSVProcessorFunction:
+    Type: AWS::Serverless::Function
+
+    Properties:
+
+      CodeUri: lambda/CSVProcessorFunction/
+
+      Handler: index.handler
+
+      Environment:
+
+        Variables:
+
+          QUEUE_URL:
+            Ref: ProductsQueue
+
+      Policies:
+
+        # ------------------------------------------------------
+        # Explicit S3 permission.
+        #
+        # IMPORTANT:
+        # Do not replace this with S3ReadPolicy + Ref ProductsBucket.
+        # That would recreate the circular dependency.
+        # ------------------------------------------------------
+
+        - Statement:
+
+            - Sid: ReadCSVFilesFromS3
+
+              Effect: Allow
+
+              Action:
+                - s3:GetObject
+
+              Resource:
+                - arn:aws:s3:::event-driven-products-sam-344kjbds231jkda/*
+
+        # ------------------------------------------------------
+        # Allow Lambda to send messages to ProductsQueue
+        # ------------------------------------------------------
+
+        - SQSSendMessagePolicy:
+            QueueName: EventDrivenProductsQueue
+
+      Events:
+
+        S3Upload:
+
+          Type: S3
+
+          Properties:
+
+            Bucket:
+              Ref: ProductsBucket
+
+            Events:
+              - s3:ObjectCreated:*
+
+            Filter:
+
+              S3Key:
+
+                Rules:
+
+                  - Name: prefix
+                    Value: uploads/
+
+                  - Name: suffix
+                    Value: .csv
+
+  # ==========================================================
+  # PRODUCT CONSUMER LAMBDA
+  #
+  # SQS
+  #  ↓
+  # ProductConsumerFunction
+  #  ↓
+  # DynamoDB
+  # ==========================================================
+
+  ProductConsumerFunction:
+    Type: AWS::Serverless::Function
+
+    Properties:
+
+      CodeUri: lambda/ProductConsumerFunction/
+
+      Handler: index.handler
+
+      Environment:
+
+        Variables:
+
+          TABLE_NAME:
+            Ref: ProductsTable
+
+      Policies:
+
+        - DynamoDBWritePolicy:
+            TableName:
+              Ref: ProductsTable
+
+      Events:
+
+        ProductsQueueEvent:
+
+          Type: SQS
+
+          Properties:
+
+            Queue:
+              Fn::GetAtt:
+                - ProductsQueue
+                - Arn
+
+            BatchSize: 10
+
+            Enabled: true
+
+  # ==========================================================
+  # GENERATE PRESIGNED UPLOAD URL LAMBDA
+  #
+  # Frontend
+  #  ↓
+  # POST /upload-url
+  #  ↓
+  # GenerateUploadURLFunction
+  #  ↓
+  # S3 Presigned URL
+  # ==========================================================
+
+  GenerateUploadURLFunction:
+    Type: AWS::Serverless::Function
+
+    Properties:
+
+      CodeUri: lambda/GenerateUploadURLFunction/
+
+      Handler: index.handler
+
+      Environment:
+
+        Variables:
+
+          BUCKET_NAME:
+            Ref: ProductsBucket
+
+      Policies:
+
+        - S3WritePolicy:
+            BucketName:
+              Ref: ProductsBucket
+
+      Events:
+
+        UploadURL:
+
+          Type: HttpApi
+
+          Properties:
+
+            ApiId:
+              Ref: ProductsApi
+
+            Path: /upload-url
+
+            Method: POST
+
+  # ==========================================================
+  # GET PRODUCTS LAMBDA
+  #
+  # Frontend
+  #  ↓
+  # GET /products
+  #  ↓
+  # GetProductsFunction
+  #  ↓
+  # DynamoDB
+  # ==========================================================
+
+  GetProductsFunction:
+    Type: AWS::Serverless::Function
+
+    Properties:
+
+      CodeUri: lambda/GetProductsFunction/
+
+      Handler: index.handler
+
+      Environment:
+
+        Variables:
+
+          TABLE_NAME:
+            Ref: ProductsTable
+
+      Policies:
+
+        - DynamoDBReadPolicy:
+            TableName:
+              Ref: ProductsTable
+
+      Events:
+
+        GetProducts:
+
+          Type: HttpApi
+
+          Properties:
+
+            ApiId:
+              Ref: ProductsApi
+
+            Path: /products
+
+            Method: GET
+
+# ============================================================
+# OUTPUTS
+# ============================================================
+
+Outputs:
+
+  # ==========================================================
+  # API BASE URL
+  # ==========================================================
+
+  ApiUrl:
+
+    Description:
+      Base URL for the Products HTTP API.
+
+    Value:
+
+      Fn::Sub:
+        - 'https://${ApiId}.execute-api.${AWS::Region}.amazonaws.com'
+
+        - ApiId:
+            Ref: ProductsApi
+
+  # ==========================================================
+  # UPLOAD URL ENDPOINT
+  # ==========================================================
+
+  UploadUrlEndpoint:
+
+    Description:
+      POST endpoint used to generate an S3 presigned upload URL.
+
+    Value:
+
+      Fn::Sub:
+        - 'https://${ApiId}.execute-api.${AWS::Region}.amazonaws.com/upload-url'
+
+        - ApiId:
+            Ref: ProductsApi
+
+  # ==========================================================
+  # PRODUCTS ENDPOINT
+  # ==========================================================
+
+  ProductsEndpoint:
+
+    Description:
+      GET endpoint used to retrieve products from DynamoDB.
+
+    Value:
+
+      Fn::Sub:
+        - 'https://${ApiId}.execute-api.${AWS::Region}.amazonaws.com/products'
+
+        - ApiId:
+            Ref: ProductsApi
+
+  # ==========================================================
+  # S3 BUCKET
+  # ==========================================================
+
+  ProductsBucketName:
+
+    Description:
+      S3 bucket used for CSV uploads.
+
+    Value:
+      Ref: ProductsBucket
+
+  # ==========================================================
+  # SQS QUEUE URL
+  # ==========================================================
+
+  ProductsQueueUrl:
+
+    Description:
+      Main SQS queue used for asynchronous product processing.
+
+    Value:
+      Ref: ProductsQueue
+
+  # ==========================================================
+  # SQS QUEUE ARN
+  # ==========================================================
+
+  ProductsQueueArn:
+
+    Description:
+      ARN of the main Products SQS queue.
+
+    Value:
+
+      Fn::GetAtt:
+        - ProductsQueue
+        - Arn
+
+  # ==========================================================
+  # DLQ ARN
+  # ==========================================================
+
+  ProductsDLQArn:
+
+    Description:
+      ARN of the Products dead-letter queue.
+
+    Value:
+
+      Fn::GetAtt:
+        - ProductsDLQ
+        - Arn
+
+  # ==========================================================
+  # DYNAMODB TABLE
+  # ==========================================================
+
+  ProductsTableName:
+
+    Description:
+      DynamoDB table storing processed products.
+
+    Value:
+      Ref: ProductsTable

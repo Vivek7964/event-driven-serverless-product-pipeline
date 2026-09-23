@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Event-Driven Product Pipeline</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>Product Data Pipeline</h1>
+
+    <section class="upload-section">
+
+        <h2>Upload Products CSV</h2>
+
+        <input
+            type="file"
+            id="csvFile"
+            accept=".csv"
+        >
+
+        <button id="uploadButton">
+            Upload CSV
+        </button>
+
+        <p id="uploadStatus"></p>
+
+    </section>
+
+
+    <section class="products-section">
+
+        <div class="products-header">
+
+            <h2>Products</h2>
+
+            <button id="refreshButton">
+                Refresh Products
+            </button>
+
+        </div>
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Product ID</th>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Price</th>
+                    <th>Quantity</th>
+                </tr>
+            </thead>
+
+            <tbody id="productsTable">
+
+            </tbody>
+
+        </table>
+
+    </section>
+
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>

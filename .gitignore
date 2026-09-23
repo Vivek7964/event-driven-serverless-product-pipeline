@@ -1,0 +1,5 @@
+.aws-sam/
+node_modules/
+packaged.yaml
+.env
+*.log
